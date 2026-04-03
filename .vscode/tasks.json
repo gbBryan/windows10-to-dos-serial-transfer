@@ -1,0 +1,48 @@
+{
+    "version": "2.0.0",
+    "tasks": [
+        {
+            "label": "Build DOS 16-bit",
+            "type": "shell",
+            "command": "wcl",
+            "args": [
+                "-bt=dos", "-ms", "-0", "-os",
+                "${file}",
+                "-fe=${fileDirname}\\${fileBasenameNoExtension}_dos.exe"
+            ],
+            "group": "build",
+            "problemMatcher": []
+        },
+        {
+            "label": "Build Win32 (95/98)",
+            "type": "shell",
+            "command": "wcl386",
+            "args": [
+                "-bt=nt", "-l=nt",
+                "${file}",
+                "-fe=${fileDirname}\\${fileBasenameNoExtension}_w32.exe"
+            ],
+            "group": "build",
+            "problemMatcher": []
+        },
+        {
+            "label": "Build All Targets",
+            "dependsOn": ["Build DOS 16-bit", "Build Win32 (95/98)"],
+            "group": {
+                "kind": "build",
+                "isDefault": true
+            }
+        },{
+    "label": "Build Win10 (modern)",
+    "type": "shell",
+    "command": "gcc",
+    "args": [
+        "-o", "${fileDirname}\\${fileBasenameNoExtension}_w10.exe",
+        "${file}",
+        "-Wall", "-Wextra"
+    ],
+    "group": "build",
+    "problemMatcher": "$gcc"
+}
+    ]
+}
