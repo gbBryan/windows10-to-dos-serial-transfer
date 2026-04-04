@@ -9,12 +9,13 @@
 #define STX  0x02
 #define ETX  0x03
 
-#define PKT_TYPE_DATA  0x01
-#define PKT_TYPE_ACK   0x02
-#define PKT_TYPE_NAK   0x03
-#define PKT_TYPE_EOF   0x04
+#define PKT_TYPE_DATA   0x01
+#define PKT_TYPE_ACK    0x02
+#define PKT_TYPE_NAK    0x03
+#define PKT_TYPE_EOF    0x04
+#define PKT_TYPE_HEADER 0x05
 
-#define MAX_PAYLOAD 128
+#define MAX_PAYLOAD 512
 
 typedef struct {
     unsigned char  type;

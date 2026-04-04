@@ -1,5 +1,6 @@
 #include "../common/serial.h"
 #include <dos.h>
+#include <i86.h>
 #include <stdlib.h>
 
 /* Direct UART register offsets (base addresses for COM1/COM2) */
@@ -29,7 +30,7 @@ static unsigned int get_base(const char *port)
     return COM1_BASE;
 }
 
-SerialPort serial_open(const char *port, int baud)
+SerialPort serial_open(const char *port, long baud)
 {
     DosSerial *s;
     unsigned int base;
@@ -70,17 +71,31 @@ int serial_write(SerialPort sp, const unsigned char *buf, int len)
     return len;
 }
 
+/* Read tick count via BIOS INT 1Ah AH=00, ~18.2 ticks/sec */
+static unsigned long bios_ticks(void)
+{
+    union REGS regs;
+    regs.h.ah = 0x00;
+    int86(0x1A, &regs, &regs);
+    return ((unsigned long)regs.w.cx << 16) | (unsigned long)regs.w.dx;
+}
+
 int serial_read(SerialPort sp, unsigned char *buf, int len, int timeout_ms)
 {
     DosSerial *s = (DosSerial *)sp;
     int i;
-    long deadline;
+    unsigned long start, ticks_needed, ichar_ticks, t;
+
+    /* 18.2 ticks/sec, convert ms to ticks (round up by adding 1) */
+    ticks_needed = (unsigned long)timeout_ms * 182UL / 10000UL + 1UL;
+    ichar_ticks  = 4UL; /* ~220ms inter-character timeout within a packet */
 
     for (i = 0; i < len; i++) {
-        /* Busy-wait with a crude timeout loop */
-        deadline = timeout_ms * 1000L;
+        /* First byte uses the full timeout, subsequent bytes use short gap timeout */
+        t = (i == 0) ? ticks_needed : ichar_ticks;
+        start = bios_ticks();
         while (!(inp(s->base + UART_LSR) & LSR_DR)) {
-            if (--deadline <= 0) return i;
+            if ((bios_ticks() - start) >= t) return i;
         }
         buf[i] = (unsigned char)inp(s->base + UART_RBR);
     }

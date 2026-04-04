@@ -1,0 +1,2 @@
+tests\rawrecv.c(23): Warning! W131: No prototype found for function 'outp'
+tests\rawrecv.c(35): Warning! W131: No prototype found for function 'inp'

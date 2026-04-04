@@ -6,7 +6,7 @@
 
 typedef void *SerialPort;
 
-SerialPort serial_open(const char *port, int baud);
+SerialPort serial_open(const char *port, long baud);
 void       serial_close(SerialPort sp);
 int        serial_write(SerialPort sp, const unsigned char *buf, int len);
 int        serial_read(SerialPort sp, unsigned char *buf, int len, int timeout_ms);

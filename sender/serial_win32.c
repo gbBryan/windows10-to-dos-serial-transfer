@@ -7,7 +7,7 @@ typedef struct {
     HANDLE h;
 } Win32Serial;
 
-SerialPort serial_open(const char *port, int baud)
+SerialPort serial_open(const char *port, long baud)
 {
     Win32Serial *s;
     HANDLE h;
@@ -34,8 +34,8 @@ SerialPort serial_open(const char *port, int baud)
 
     if (!SetCommState(h, &dcb)) { CloseHandle(h); return NULL; }
 
-    timeouts.ReadIntervalTimeout         = 50;
-    timeouts.ReadTotalTimeoutMultiplier  = 10;
+    timeouts.ReadIntervalTimeout         = 0;
+    timeouts.ReadTotalTimeoutMultiplier  = 0;
     timeouts.ReadTotalTimeoutConstant    = 500;
     timeouts.WriteTotalTimeoutMultiplier = 10;
     timeouts.WriteTotalTimeoutConstant   = 500;

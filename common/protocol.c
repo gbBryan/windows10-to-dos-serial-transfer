@@ -13,7 +13,6 @@ unsigned char calc_checksum(const unsigned char *data, unsigned short len)
 int packet_encode(const Packet *pkt, unsigned char *buf, int buf_size)
 {
     int needed = 5 + pkt->len + 1; /* STX LEN_HI LEN_LO TYPE payload CHECKSUM ETX */
-    int i;
     if (buf_size < needed + 1) return -1;
 
     buf[0] = STX;
