@@ -1,16 +1,35 @@
 #include <stdio.h>
 #include <string.h>
-#include <dos.h>
-#include <i86.h>
+#include <dos.h>   /* MK_FP                              */
+#include <i86.h>   /* union REGS, int86 for BIOS calls   */
 #include "../common/protocol.h"
 #include "../common/serial.h"
 
-#define BAUD_RATE  9600
-#define TIMEOUT_MS 2000
-#define BUF_SIZE   (MAX_PAYLOAD + 8)
-#define BAR_WIDTH  20
+/*
+ * receiver_dos.c — DOS side of the file transfer.
+ *
+ * This program runs inside DOSBox (or real DOS hardware) and waits for
+ * files to be sent from the Windows 10 sender over a serial link.
+ *
+ * Transfer flow:
+ *   1. Wait for a HEADER packet — tells us the filename and file size
+ *   2. Send ACK to confirm we got the header
+ *   3. Loop receiving DATA packets — write each payload to disk, send ACK
+ *   4. When EOF packet arrives, print summary and exit
+ *
+ * If a packet fails to decode (bad checksum, framing error etc.) we send
+ * a NAK and the sender will retransmit that packet.
+ */
 
-/* Read tick count via BIOS INT 1Ah AH=00, ~18.2 ticks/sec */
+#define BAUD_RATE  9600   /* Must match sender — both sides must agree  */
+#define TIMEOUT_MS 2000   /* How long to wait for a packet (ms)         */
+#define BUF_SIZE   (MAX_PAYLOAD + 8)  /* Buffer for raw incoming bytes  */
+#define BAR_WIDTH  20     /* Width of the progress bar in characters    */
+
+/*
+ * bios_ticks — read the real-time tick counter via BIOS interrupt.
+ * See serial_dos.c for full explanation.
+ */
 static unsigned long bios_ticks(void)
 {
     union REGS regs;
@@ -19,6 +38,10 @@ static unsigned long bios_ticks(void)
     return ((unsigned long)regs.w.cx << 16) | (unsigned long)regs.w.dx;
 }
 
+/*
+ * send_ack — tell the sender "packet received OK, send the next one".
+ * Static buffers avoid putting large objects on the small DOS stack.
+ */
 static void send_ack(SerialPort sp)
 {
     static Packet ack;
@@ -31,6 +54,9 @@ static void send_ack(SerialPort sp)
     if (len > 0) serial_write(sp, buf, len);
 }
 
+/*
+ * send_nak — tell the sender "bad packet, please resend".
+ */
 static void send_nak(SerialPort sp)
 {
     static Packet nak;
@@ -43,6 +69,13 @@ static void send_nak(SerialPort sp)
     if (len > 0) serial_write(sp, buf, len);
 }
 
+/*
+ * print_progress — draw a [####   ] progress bar on a single line.
+ *
+ * \r (carriage return without newline) moves the cursor back to the
+ * start of the line so each update overwrites the previous one.
+ * This is standard technique for console progress displays.
+ */
 static void print_progress(long received, long total)
 {
     int i, filled;
@@ -66,8 +99,8 @@ int main(int argc, char *argv[])
 {
     SerialPort sp;
     FILE *fp;
-    static unsigned char buf[BUF_SIZE];
-    static Packet pkt;
+    static unsigned char buf[BUF_SIZE]; /* static = lives in data segment, not stack */
+    static Packet pkt;                  /* Packet has 512-byte payload — too big for stack */
     int n;
     long file_size, bytes_received;
     char fname[32];
@@ -85,7 +118,7 @@ int main(int argc, char *argv[])
         return 1;
     }
 
-    fp = fopen(argv[2], "wb");
+    fp = fopen(argv[2], "wb");  /* "wb" = write binary — don't mangle bytes */
     if (!fp) {
         printf("Failed to open output file: %s\r\n", argv[2]);
         serial_close(sp);
@@ -94,25 +127,28 @@ int main(int argc, char *argv[])
 
     printf("Waiting for transfer on %s...\r\n", argv[1]);
 
-    /* Wait for header packet - use longer timeout */
+    /*
+     * Wait for the HEADER packet.
+     * The header is always the first packet sent and contains the
+     * filename and file size so we can show an accurate progress bar.
+     * We use a longer timeout here (10 seconds) since the user may
+     * take a moment to start the sender after starting the receiver.
+     */
     for (;;) {
-        printf("DBG: calling serial_read\r\n");
         n = serial_read(sp, buf, BUF_SIZE, 10000);
-        printf("DBG: serial_read returned %d\r\n", n);
         if (n <= 0) continue;
-        printf("DBG: buf[0]=%02X len=%d buf[last]=%02X\r\n",
-               buf[0], n, buf[n-1]);
-        printf("DBG: calling packet_decode\r\n");
-        if (packet_decode(buf, n, &pkt) != 0) {
-            printf("DBG: decode failed, sending NAK\r\n");
-            send_nak(sp);
-            continue;
-        }
-        printf("DBG: pkt.type=%d\r\n", (int)pkt.type);
+        if (packet_decode(buf, n, &pkt) != 0) { send_nak(sp); continue; }
         if (pkt.type == PKT_TYPE_HEADER) break;
     }
 
-    /* Unpack header: 4 bytes file size + filename */
+    /*
+     * Unpack the header payload:
+     *   bytes 0-3: file size as a 32-bit big-endian integer
+     *   bytes 4+ : filename as a null-terminated string
+     *
+     * Big-endian means the most significant byte comes first.
+     * We reconstruct the 32-bit value by shifting each byte into place.
+     */
     file_size  = ((long)pkt.payload[0] << 24)
                | ((long)pkt.payload[1] << 16)
                | ((long)pkt.payload[2] <<  8)
@@ -120,7 +156,6 @@ int main(int argc, char *argv[])
     strncpy(fname, (char *)&pkt.payload[4], 31);
     fname[31] = '\0';
 
-    printf("DBG: sending ACK for header\r\n");
     send_ack(sp);
 
     printf("Receiving: %s (%ld bytes)\r\n", fname, file_size);
@@ -128,29 +163,31 @@ int main(int argc, char *argv[])
     bytes_received = 0;
     t_start = bios_ticks();
 
+    /* Main receive loop — keep going until we get an EOF packet */
     for (;;) {
         n = serial_read(sp, buf, BUF_SIZE, TIMEOUT_MS);
         if (n <= 0) continue;
 
         if (packet_decode(buf, n, &pkt) != 0) {
-            send_nak(sp);
+            send_nak(sp);   /* bad packet — ask sender to retry */
             continue;
         }
 
         if (pkt.type == PKT_TYPE_EOF)
-            break;
+            break;  /* sender says we're done */
 
         if (pkt.type == PKT_TYPE_DATA) {
-            fwrite(pkt.payload, 1, pkt.len, fp);
+            fwrite(pkt.payload, 1, pkt.len, fp);  /* write payload bytes to file */
             bytes_received += pkt.len;
             send_ack(sp);
             print_progress(bytes_received, file_size);
         }
     }
 
-    t_end      = bios_ticks();
+    /* Calculate transfer statistics using BIOS ticks */
+    t_end         = bios_ticks();
     elapsed_ticks = t_end - t_start;
-    elapsed_sec   = (long)(elapsed_ticks * 10 / 182); /* ticks to seconds */
+    elapsed_sec   = (long)(elapsed_ticks * 10 / 182);  /* ticks → seconds */
     speed = elapsed_sec > 0 ? bytes_received / elapsed_sec : 0;
 
     printf("\r\n\r\nTransfer complete.\r\n");
